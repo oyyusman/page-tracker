@@ -1,0 +1,12 @@
+{
+  "name": "page-tracker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Facebook profile & page activity tracker",
+  "scripts": {
+    "start": "node server.js --open"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

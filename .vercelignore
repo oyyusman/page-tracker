@@ -1,0 +1,7 @@
+.env
+.env.*
+data/
+cron-url.txt
+*.log
+start.bat
+add-to-startup.ps1

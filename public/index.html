@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Page Tracker</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<section id="login" class="login" hidden>
+  <form id="loginForm" class="login-card">
+    <div class="brand">
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><rect x="3" y="12" width="4" height="9" rx="1"/><rect x="10" y="7" width="4" height="14" rx="1"/><rect x="17" y="3" width="4" height="18" rx="1"/></svg>
+      <span>Page Tracker</span>
+    </div>
+    <label for="password">Password</label>
+    <input id="password" type="password" autocomplete="current-password" required>
+    <button id="loginBtn" class="btn" type="submit">Open tracker</button>
+    <div id="loginErr" class="err" role="alert"></div>
+  </form>
+</section>
+
+<div id="app">
+<header class="topbar">
+  <div class="brand">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><rect x="3" y="12" width="4" height="9" rx="1"/><rect x="10" y="7" width="4" height="14" rx="1"/><rect x="17" y="3" width="4" height="18" rx="1"/></svg>
+    <span>Page Tracker</span>
+  </div>
+  <div class="sync">
+    <span id="syncText" class="muted">Loading…</span>
+    <button id="syncBtn" class="btn">Sync now</button>
+    <button id="logoutBtn" class="btn ghost" hidden>Log out</button>
+  </div>
+</header>
+
+<main>
+  <div id="alerts"></div>
+
+  <section class="tiles" id="tiles"></section>
+
+  <section>
+    <div class="section-head">
+      <h2>Profiles</h2>
+      <span class="muted" id="profileCount"></span>
+    </div>
+    <div class="profiles" id="profiles"></div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <h2 id="pagesTitle">Pages</h2>
+      <div class="toolbar">
+        <input id="search" type="search" placeholder="Search pages…" aria-label="Search pages">
+        <select id="filter" aria-label="Filter pages">
+          <option value="all">All pages</option>
+          <option value="today">Posted today</option>
+          <option value="yesterday">Posted yesterday</option>
+          <option value="none-yesterday">No posts yesterday</option>
+          <option value="inactive">Inactive (no posts in 7 days)</option>
+        </select>
+      </div>
+    </div>
+    <p class="ranges muted" id="ranges"></p>
+    <div class="table-wrap">
+      <table id="pagesTable">
+        <thead>
+          <tr>
+            <th data-sort="name" class="left">Page</th>
+            <th data-sort="profile" class="left col-profile">Profile</th>
+            <th data-sort="followers">Followers</th>
+            <th data-sort="today">Today</th>
+            <th data-sort="yesterday">Yesterday</th>
+            <th data-sort="last7">Last 7 days</th>
+            <th data-sort="last30">Last 30 days</th>
+            <th data-sort="prevWeek">Prev. week</th>
+            <th data-sort="prevMonth" id="prevMonthHead">Prev. month</th>
+            <th data-sort="lastPost">Last post</th>
+            <th data-sort="status" class="left">Status</th>
+          </tr>
+        </thead>
+        <tbody id="pagesBody"></tbody>
+        <tfoot id="pagesFoot"></tfoot>
+      </table>
+    </div>
+  </section>
+</main>
+</div>
+
+<div id="tooltip" class="tooltip" hidden></div>
+<script src="/app.js"></script>
+</body>
+</html>
