@@ -51,6 +51,13 @@
       <h2 id="pagesTitle">Pages</h2>
       <div class="toolbar">
         <input id="search" type="search" placeholder="Search pages…" aria-label="Search pages">
+        <select id="kind" aria-label="Post type">
+          <option value="all">All post types</option>
+          <option value="reel">🎬 Reels only</option>
+          <option value="picture">🖼️ Pictures only</option>
+          <option value="text">📝 Text only</option>
+          <option value="other">🔗 Videos &amp; links only</option>
+        </select>
         <select id="filter" aria-label="Filter pages">
           <option value="all">All pages</option>
           <option value="today">Posted today</option>
@@ -73,7 +80,8 @@
             <th data-sort="last7">Last 7 days</th>
             <th data-sort="last30">Last 30 days</th>
             <th data-sort="prevWeek">Prev. week</th>
-            <th data-sort="prevMonth" id="prevMonthHead">Prev. month</th>
+            <th data-sort="thisMonth">This month</th>
+            <th data-sort="prevMonth">Prev. month</th>
             <th data-sort="lastPost">Last post</th>
             <th data-sort="status" class="left">Status</th>
           </tr>

@@ -1,7 +1,7 @@
 // Page Tracker dashboard (vanilla JS). All dates are computed in this computer's local time.
 const $ = s => document.querySelector(s);
 const DAY = 86400000;
-const st = { data: null, profile: null, sort: { key: 'last7', dir: -1 }, search: '', filter: 'all', open: null, lastSync: null };
+const st = { data: null, profile: null, sort: { key: 'last7', dir: -1 }, search: '', filter: 'all', kind: 'all', open: null, lastSync: null };
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const num = n => n == null ? '–' : Number(n).toLocaleString();
@@ -16,7 +16,45 @@ function ago(iso) {
   return Math.floor(s / 86400) + ' d ago';
 }
 
+// ---------- post types ----------
+// Fixed order = fixed colour slot (never re-assigned when filtering).
+const KINDS = [
+  { k: 'reel', label: 'Reels', one: 'Reel', icon: '🎬' },
+  { k: 'picture', label: 'Pictures', one: 'Picture', icon: '🖼️' },
+  { k: 'text', label: 'Text', one: 'Text', icon: '📝' },
+  { k: 'other', label: 'Videos & links', one: 'Other', icon: '🔗' },
+];
+const KIND = Object.fromEntries(KINDS.map(x => [x.k, x]));
+const RAW_LABEL = { video: 'Video', link: 'Link', other: 'Other' };
+
+// raw kind from the server (older data: derive from status_type / link)
+function rawKind(p) {
+  if (p.kind) return p.kind;
+  if (/\/reel\//.test(p.link || '')) return 'reel';
+  if (p.type === 'added_photos') return 'picture';
+  if (p.type === 'added_video') return 'video';
+  if (p.type === 'shared_story') return 'link';
+  if (!p.type || p.type === 'mobile_status_update') return 'text';
+  return 'other';
+}
+const group = raw => (raw === 'reel' || raw === 'picture' || raw === 'text') ? raw : 'other';
+function kindChip(raw, withLabel = true) {
+  if (!raw) return '';
+  const g = group(raw);
+  const label = RAW_LABEL[raw] || KIND[g].one;
+  return `<span class="kchip k-${g}" title="${esc(label)}"><span class="kdot"></span>${KIND[g].icon}${withLabel ? ' ' + esc(label) : ''}</span>`;
+}
+
 // ---------- date ranges ----------
+const PERIODS = [
+  { k: 'today', short: 'Today' },
+  { k: 'yesterday', short: 'Yesterday' },
+  { k: 'last7', short: 'Last 7 days' },
+  { k: 'last30', short: 'Last 30 days' },
+  { k: 'prevWeek', short: 'Prev. week' },
+  { k: 'thisMonth', short: 'This month' },
+  { k: 'prevMonth', short: 'Prev. month' },
+];
 function ranges() {
   const now = new Date();
   const t0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -25,33 +63,45 @@ function ranges() {
   const m1 = new Date(t0.getFullYear(), t0.getMonth(), 1);
   const pm1 = new Date(t0.getFullYear(), t0.getMonth() - 1, 1);
   const d = n => new Date(t0.getTime() - n * DAY);
+  const tomorrow = new Date(t0.getTime() + DAY);
   return {
-    today: [t0, new Date(t0.getTime() + DAY)],
+    today: [t0, tomorrow],
     yesterday: [d(1), t0],
     last7: [d(7), t0],
     last30: [d(30), t0],
     prevWeek: [prevMon, mon],
+    thisMonth: [m1, tomorrow],
     prevMonth: [pm1, m1],
     t0,
   };
 }
 const R = { cur: ranges() };
-
-function countIn(posts, [a, b]) {
-  let n = 0;
-  for (const p of posts) { const t = new Date(p.created); if (t >= a && t < b) n++; }
-  return n;
+const monthName = d => d.toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
+function periodLabel(k) {
+  const r = R.cur;
+  if (k === 'thisMonth') return monthName(r.thisMonth[0]);
+  if (k === 'prevMonth') return monthName(r.prevMonth[0]);
+  return PERIODS.find(p => p.k === k).short;
 }
+
+const emptyCounts = () => ({ total: 0, reel: 0, picture: 0, text: 0, other: 0 });
+function countIn(posts, [a, b]) {
+  const c = emptyCounts();
+  for (const p of posts) {
+    const t = new Date(p.created);
+    if (t >= a && t < b) { c.total++; c[group(rawKind(p))]++; }
+  }
+  return c;
+}
+// value shown for the selected post type
+const val = c => st.kind === 'all' ? c.total : c[st.kind];
 
 function pageStats(p) {
   const posts = p.posts || [];
-  const r = R.cur;
-  const s = {
-    today: countIn(posts, r.today), yesterday: countIn(posts, r.yesterday),
-    last7: countIn(posts, r.last7), last30: countIn(posts, r.last30),
-    prevWeek: countIn(posts, r.prevWeek), prevMonth: countIn(posts, r.prevMonth),
-    lastPost: p.lastPostAt ? new Date(p.lastPostAt).getTime() : 0,
-  };
+  const s = { c: {} };
+  for (const { k } of PERIODS) s.c[k] = countIn(posts, R.cur[k]);
+  s.lastPost = p.lastPostAt ? new Date(p.lastPostAt).getTime() : 0;
+  s.lastKind = p.lastPostKind || (posts[0] ? rawKind(posts[0]) : null);
   const days = s.lastPost ? (Date.now() - s.lastPost) / DAY : Infinity;
   if (p.status === 'error') s.status = { cls: 'critical', label: 'Error', rank: 0 };
   else if (!s.lastPost) s.status = { cls: 'none', label: 'No posts', rank: 1 };
@@ -59,6 +109,13 @@ function pageStats(p) {
   else if (days <= 7) s.status = { cls: 'warning', label: 'Slowing', rank: 3 };
   else s.status = { cls: 'serious', label: `Inactive ${Math.floor(days)}d`, rank: 2 };
   return s;
+}
+function addCounts(a, b) { for (const k in a) a[k] += b[k]; return a; }
+
+// small "🎬9 🖼️1" line under a total (only when showing all types)
+function breakdown(c, cls = 'bd') {
+  if (st.kind !== 'all' || !c.total) return '';
+  return `<div class="${cls}">${KINDS.filter(x => c[x.k]).map(x => `<span class="k-${x.k}" title="${c[x.k]} ${esc(x.label)}"><span class="kdot"></span>${x.icon}${c[x.k]}</span>`).join('')}</div>`;
 }
 
 // ---------- data ----------
@@ -127,8 +184,8 @@ function renderAlerts() {
   if (st.syncError) out.push(`<div class="alert"><b>Sync failed:</b>&nbsp;${esc(st.syncError)}</div>`);
   for (const p of Object.values(d.profiles || {})) {
     const t = tokenState(p);
-    if (t.cls === 'critical') out.push(`<div class="alert"><b>${esc(p.name)}:</b>&nbsp;${esc(p.error || t.label)}. Pages keep updating with saved page tokens, but new pages won't be detected until the token in <code>.env</code> is replaced.</div>`);
-    else if (t.cls === 'warning') out.push(`<div class="alert warn"><b>${esc(p.name)}:</b>&nbsp;${esc(t.label)} – generate a new token and update <code>.env</code> soon.</div>`);
+    if (t.cls === 'critical') out.push(`<div class="alert"><b>${esc(p.name)}:</b>&nbsp;${esc(p.error || t.label)}. Pages keep updating with saved page tokens, but new pages won't be detected until the token is replaced.</div>`);
+    else if (t.cls === 'warning') out.push(`<div class="alert warn"><b>${esc(p.name)}:</b>&nbsp;${esc(t.label)} – generate a new token and update it soon.</div>`);
   }
   const pageErrs = Object.values(d.pages || {}).filter(p => p.status === 'error');
   if (pageErrs.length) out.push(`<div class="alert warn"><b>${pageErrs.length} page(s) failed to update:</b>&nbsp;${pageErrs.map(p => esc(p.name)).join(', ')}. Open the page row for details.</div>`);
@@ -150,25 +207,30 @@ function tokenState(p) {
 }
 
 function sumStats(pages) {
-  const s = { today: 0, yesterday: 0, last7: 0, last30: 0, prevWeek: 0, prevMonth: 0, followers: 0 };
-  for (const p of pages) { const x = pageStats(p); for (const k of Object.keys(s)) s[k] += k === 'followers' ? (p.followers || 0) : x[k]; }
+  const s = { c: Object.fromEntries(PERIODS.map(p => [p.k, emptyCounts()])), followers: 0, posted7: 0 };
+  for (const p of pages) {
+    const x = pageStats(p);
+    for (const { k } of PERIODS) addCounts(s.c[k], x.c[k]);
+    s.followers += p.followers || 0;
+    if (val(x.c.last7) > 0) s.posted7++;
+  }
   return s;
 }
 
 function renderTiles() {
   const pages = profilePages(st.profile);
   const s = sumStats(pages);
-  const active = pages.filter(p => pageStats(p).last7 > 0).length;
   const scope = st.profile === 'all' ? 'All profiles' : profileName(st.profile);
   const r = R.cur;
-  const tile = (label, value, sub) => `<div class="tile"><div class="label">${label}</div><div class="value">${value}</div><div class="sub">${sub}</div></div>`;
+  const what = st.kind === 'all' ? 'Posts' : KIND[st.kind].label;
+  const tile = (label, c, sub) => `<div class="tile"><div class="label">${label}</div><div class="value">${num(val(c))}</div>${breakdown(c, 'bd tile-bd')}<div class="sub">${sub}</div></div>`;
   $('#tiles').innerHTML = [
-    tile('Pages', num(pages.length), esc(scope)),
-    tile('Posts today', num(s.today), fmtDate(r.t0)),
-    tile('Posts yesterday', num(s.yesterday), fmtDate(r.yesterday[0])),
-    tile('Last 7 days', num(s.last7), `${active} of ${pages.length} pages posted`),
-    tile('Last 30 days', num(s.last30), `${fmtDate(r.last30[0])} – ${fmtDate(new Date(r.t0 - DAY))}`),
-    tile('Followers', num(s.followers), 'across these pages'),
+    `<div class="tile"><div class="label">Pages</div><div class="value">${num(pages.length)}</div><div class="sub">${esc(scope)}</div></div>`,
+    tile(`${what} today`, s.c.today, fmtDate(r.t0)),
+    tile(`${what} yesterday`, s.c.yesterday, fmtDate(r.yesterday[0])),
+    tile(`${what} · last 7 days`, s.c.last7, `${s.posted7} of ${pages.length} pages posted`),
+    tile(`${what} · last 30 days`, s.c.last30, `${fmtDate(r.last30[0])} – ${fmtDate(new Date(r.t0 - DAY))}`),
+    tile(`${what} · ${monthName(r.thisMonth[0])}`, s.c.thisMonth, `${fmtDate(r.thisMonth[0])} – today`),
   ].join('');
 }
 
@@ -177,17 +239,14 @@ function renderProfiles() {
   $('#profileCount').textContent = `${profiles.length} profile${profiles.length === 1 ? '' : 's'}`;
   const card = (id, name, pic, pages, extra) => {
     const s = sumStats(pages);
+    const stat = (k, label) => `<div class="stat"><b>${val(s.c[k])}</b><span>${label}</span></div>`;
     return `<button class="profile ${st.profile === id ? 'selected' : ''}" data-profile="${esc(id)}">
       <div class="head">
         ${pic ? `<img class="avatar" src="${esc(pic)}" alt="" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'avatar initials',textContent:'${esc(initials(name))}'}))">` : `<div class="avatar initials">${esc(initials(name))}</div>`}
         <div><div class="name">${esc(name)}</div><div class="muted">${pages.length} page${pages.length === 1 ? '' : 's'}</div></div>
       </div>
-      <div class="stats">
-        <div class="stat"><b>${s.today}</b><span>Today</span></div>
-        <div class="stat"><b>${s.yesterday}</b><span>Yesterday</span></div>
-        <div class="stat"><b>${s.last7}</b><span>7 days</span></div>
-        <div class="stat"><b>${s.last30}</b><span>30 days</span></div>
-      </div>
+      <div class="stats">${stat('today', 'Today')}${stat('yesterday', 'Yesterday')}${stat('last7', '7 days')}${stat('last30', '30 days')}</div>
+      ${breakdown(s.c.last30, 'bd card-bd')}
       ${extra}
     </button>`;
   };
@@ -197,40 +256,40 @@ function renderProfiles() {
     const t = tokenState(p);
     html += card(p.id, p.name, p.picture, profilePages(p.id), `<span class="badge"><span class="dot ${t.cls}"></span>${esc(t.label)}</span>`);
   }
-  $('#profiles').innerHTML = html || `<div class="empty">No profiles yet – add a token to .env and click Sync now.</div>`;
+  $('#profiles').innerHTML = html || `<div class="empty">No profiles yet – add a token and click Sync now.</div>`;
 }
 
 function renderTable() {
   const r = R.cur;
   const all = st.profile === 'all';
-  $('#pagesTitle').textContent = all ? 'All pages' : `Pages of ${profileName(st.profile)}`;
-  $('#pagesTable').classList.toggle('single', !all);
+  $('#pagesTitle').textContent = (all ? 'All pages' : `Pages of ${profileName(st.profile)}`) + (st.kind === 'all' ? '' : ` · ${KIND[st.kind].label} only`);
   document.querySelectorAll('.col-profile').forEach(el => el.hidden = !all);
-  $('#prevMonthHead').textContent = r.prevMonth[0].toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
-  $('#ranges').textContent =
+  for (const { k } of PERIODS) { const th = document.querySelector(`th[data-sort="${k}"]`); if (th) th.textContent = periodLabel(k); }
+  $('#ranges').innerHTML =
     `Yesterday = ${fmtDate(r.yesterday[0])} · Last 7 days = ${fmtDate(r.last7[0])}–${fmtDate(new Date(r.t0 - DAY))} · ` +
     `Last 30 days = ${fmtDate(r.last30[0])}–${fmtDate(new Date(r.t0 - DAY))} · Prev. week = ${fmtDate(r.prevWeek[0])}–${fmtDate(new Date(r.prevWeek[1] - DAY))} (Mon–Sun) · ` +
-    `Today counts are live and grow with each sync.`;
+    `Today &amp; this month grow with each sync.` +
+    `<span class="legend">${KINDS.map(x => `<span class="k-${x.k}"><span class="kdot"></span>${x.icon} ${esc(x.label)}</span>`).join('')}</span>`;
 
   let rows = profilePages(st.profile).map(p => ({ p, s: pageStats(p) }));
   const q = st.search.trim().toLowerCase();
   if (q) rows = rows.filter(({ p }) => (p.name + ' ' + p.category).toLowerCase().includes(q));
-  if (st.filter === 'today') rows = rows.filter(x => x.s.today > 0);
-  if (st.filter === 'yesterday') rows = rows.filter(x => x.s.yesterday > 0);
-  if (st.filter === 'none-yesterday') rows = rows.filter(x => x.s.yesterday === 0);
-  if (st.filter === 'inactive') rows = rows.filter(x => x.s.last7 === 0);
+  if (st.filter === 'today') rows = rows.filter(x => val(x.s.c.today) > 0);
+  if (st.filter === 'yesterday') rows = rows.filter(x => val(x.s.c.yesterday) > 0);
+  if (st.filter === 'none-yesterday') rows = rows.filter(x => val(x.s.c.yesterday) === 0);
+  if (st.filter === 'inactive') rows = rows.filter(x => val(x.s.c.last7) === 0);
 
   const { key, dir } = st.sort;
-  const val = ({ p, s }) => key === 'name' ? p.name.toLowerCase() : key === 'profile' ? (p.profileIds || []).map(profileName).join(',') :
-    key === 'followers' ? (p.followers ?? -1) : key === 'status' ? s.status.rank : s[key];
-  rows.sort((a, b) => { const x = val(a), y = val(b); return (x > y ? 1 : x < y ? -1 : 0) * dir || a.p.name.localeCompare(b.p.name); });
+  const sortVal = ({ p, s }) => key === 'name' ? p.name.toLowerCase() : key === 'profile' ? (p.profileIds || []).map(profileName).join(',') :
+    key === 'followers' ? (p.followers ?? -1) : key === 'status' ? s.status.rank : key === 'lastPost' ? s.lastPost : val(s.c[key]);
+  rows.sort((a, b) => { const x = sortVal(a), y = sortVal(b); return (x > y ? 1 : x < y ? -1 : 0) * dir || a.p.name.localeCompare(b.p.name); });
   document.querySelectorAll('th[data-sort]').forEach(th => {
     th.classList.toggle('sorted', th.dataset.sort === key);
     th.classList.toggle('asc', th.dataset.sort === key && dir === 1);
   });
 
-  const cell = n => `<td class="${n ? '' : 'zero'}">${n}</td>`;
-  const cols = all ? 11 : 10;
+  const cell = c => { const n = val(c); return `<td class="${n ? '' : 'zero'}"><div class="n">${n}</div>${breakdown(c)}</td>`; };
+  const cols = (all ? 4 : 3) + PERIODS.length + 1;
   $('#pagesBody').innerHTML = rows.map(({ p, s }) => `
     <tr class="row ${st.open === p.id ? 'open' : ''}" data-page="${esc(p.id)}">
       <td class="left"><div class="pagecell">
@@ -239,23 +298,34 @@ function renderTable() {
       </div></td>
       ${all ? `<td class="left col-profile">${esc((p.profileIds || []).map(profileName).join(', '))}</td>` : ''}
       <td>${num(p.followers)}</td>
-      ${cell(s.today)}${cell(s.yesterday)}${cell(s.last7)}${cell(s.last30)}${cell(s.prevWeek)}${cell(s.prevMonth)}
-      <td title="${esc(fmtDateTime(p.lastPostAt))}">${p.lastPostAt ? ago(p.lastPostAt) : '–'}</td>
+      ${PERIODS.map(({ k }) => cell(s.c[k])).join('')}
+      <td class="lastpost" title="${esc(fmtDateTime(p.lastPostAt))}"><div class="n">${p.lastPostAt ? ago(p.lastPostAt) : '–'}</div>${kindChip(s.lastKind)}</td>
       <td class="left"><span class="badge"><span class="dot ${s.status.cls}"></span>${esc(s.status.label)}</span></td>
     </tr>
     ${st.open === p.id ? `<tr class="detail"><td colspan="${cols}">${detail(p, s)}</td></tr>` : ''}`).join('')
     || `<tr><td colspan="${cols}" class="empty">No pages match.</td></tr>`;
 
-  const tot = rows.reduce((a, { p, s }) => { for (const k of ['today', 'yesterday', 'last7', 'last30', 'prevWeek', 'prevMonth']) a[k] += s[k]; a.f += p.followers || 0; return a; },
-    { today: 0, yesterday: 0, last7: 0, last30: 0, prevWeek: 0, prevMonth: 0, f: 0 });
+  const tot = Object.fromEntries(PERIODS.map(({ k }) => [k, emptyCounts()]));
+  let f = 0;
+  for (const { p, s } of rows) { for (const { k } of PERIODS) addCounts(tot[k], s.c[k]); f += p.followers || 0; }
   $('#pagesFoot').innerHTML = rows.length ? `<tr><td class="left">Total (${rows.length} pages)</td>${all ? '<td class="col-profile"></td>' : ''}
-    <td>${num(tot.f)}</td><td>${tot.today}</td><td>${tot.yesterday}</td><td>${tot.last7}</td><td>${tot.last30}</td><td>${tot.prevWeek}</td><td>${tot.prevMonth}</td><td></td><td></td></tr>` : '';
+    <td>${num(f)}</td>${PERIODS.map(({ k }) => `<td><div class="n">${val(tot[k])}</div>${breakdown(tot[k])}</td>`).join('')}<td></td><td></td></tr>` : '';
+}
+
+function typeMatrix(s) {
+  const head = PERIODS.map(({ k }) => `<th>${esc(periodLabel(k))}</th>`).join('');
+  const row = x => `<tr><td class="left"><span class="k-${x.k}"><span class="kdot"></span>${x.icon} ${esc(x.label)}</span></td>${PERIODS.map(({ k }) => `<td class="${s.c[k][x.k] ? '' : 'zero'}">${s.c[k][x.k]}</td>`).join('')}</tr>`;
+  return `<div class="matrix-wrap"><table class="matrix">
+    <thead><tr><th class="left">Type</th>${head}</tr></thead>
+    <tbody>${KINDS.map(row).join('')}</tbody>
+    <tfoot><tr><td class="left">All posts</td>${PERIODS.map(({ k }) => `<td>${s.c[k].total}</td>`).join('')}</tr></tfoot>
+  </table></div>`;
 }
 
 function detail(p, s) {
   const posts = (p.posts || []).slice(0, 20);
   return `<div class="detail-grid">
-    <div style="display:grid;gap:14px;align-content:start">
+    <div style="display:grid;gap:14px;align-content:start;min-width:0">
       <div class="card">
         <h3>Page details</h3>
         ${p.about ? `<p class="about">${esc(p.about)}</p>` : ''}
@@ -266,13 +336,18 @@ function detail(p, s) {
           <dt>Followers</dt><dd>${num(p.followers)}</dd>
           <dt>Likes</dt><dd>${num(p.likes)}</dd>
           <dt>Link</dt><dd><a href="${esc(p.link)}" target="_blank" rel="noopener">Open on Facebook ↗</a></dd>
-          <dt>Last post</dt><dd>${fmtDateTime(p.lastPostAt)}</dd>
+          <dt>Last post</dt><dd>${fmtDateTime(p.lastPostAt)} ${kindChip(s.lastKind)}</dd>
           <dt>Data updated</dt><dd>${fmtDateTime(p.updatedAt)}</dd>
           ${p.error ? `<dt>Error</dt><dd class="err">${esc(p.error)}</dd>` : ''}
         </dl>
       </div>
+      <div class="card">
+        <h3>Posts by type</h3>
+        ${typeMatrix(s)}
+      </div>
       <div class="card chart">
-        <h3>Posts per day – last 30 days</h3>
+        <h3>Posts per day by type – last 30 days</h3>
+        <div class="legend">${KINDS.map(x => `<span class="k-${x.k}"><span class="kdot"></span>${x.icon} ${esc(x.label)}</span>`).join('')}</div>
         ${chart(p)}
       </div>
     </div>
@@ -282,7 +357,7 @@ function detail(p, s) {
         ${posts.map(x => `<div class="post">
           ${x.image ? `<img src="${esc(x.image)}" alt="" loading="lazy">` : `<div class="noimg"></div>`}
           <div>
-            <div class="meta"><span>${fmtDateTime(x.created)}</span>
+            <div class="meta">${kindChip(rawKind(x))}<span>${fmtDateTime(x.created)}</span>
               ${x.reactions != null ? `<span>👍 ${num(x.reactions)}</span>` : ''}
               ${x.comments != null ? `<span>💬 ${num(x.comments)}</span>` : ''}
               ${x.shares ? `<span>↗ ${num(x.shares)}</span>` : ''}
@@ -290,34 +365,44 @@ function detail(p, s) {
             <div class="msg">${esc(x.message || '(no text)')}</div>
             ${x.link ? `<a href="${esc(x.link)}" target="_blank" rel="noopener">View post ↗</a>` : ''}
           </div>
-        </div>`).join('') || `<div class="muted">No posts in the last ${70} days.</div>`}
+        </div>`).join('') || `<div class="muted">No posts in the last 70 days.</div>`}
       </div>
     </div>
   </div>`;
 }
 
+// stacked bars: one segment per post type, fixed order bottom→top, 2px gap between segments
 function chart(p) {
   const t0 = R.cur.t0;
   const days = [];
   for (let i = 29; i >= 0; i--) {
     const a = new Date(t0.getFullYear(), t0.getMonth(), t0.getDate() - i);
     const b = new Date(t0.getFullYear(), t0.getMonth(), t0.getDate() - i + 1);
-    days.push({ d: a, n: countIn(p.posts || [], [a, b]) });
+    days.push({ d: a, c: countIn(p.posts || [], [a, b]) });
   }
-  const max = Math.max(1, ...days.map(x => x.n));
-  const W = 600, H = 150, padL = 4, padB = 20, padT = 14, slot = (W - padL) / 30, bw = Math.max(4, slot - 4);
-  const y = n => H - padB - (n / max) * (H - padB - padT);
+  const max = Math.max(1, ...days.map(x => x.c.total));
+  const W = 600, H = 160, padL = 4, padB = 20, padT = 14, slot = (W - padL) / 30, bw = Math.max(4, slot - 4), GAP = 2;
+  const unit = (H - padB - padT) / max;
   const bars = days.map((x, i) => {
     const x0 = padL + i * slot + (slot - bw) / 2;
-    const yy = y(x.n), h = H - padB - yy;
-    const label = `${x.d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })}: ${x.n} post${x.n === 1 ? '' : 's'}`;
-    // bar with rounded top (4px), square at baseline
-    const r = Math.min(4, bw / 2, h);
-    const path = h > 0 ? `M${x0},${H - padB} V${yy + r} Q${x0},${yy} ${x0 + r},${yy} H${x0 + bw - r} Q${x0 + bw},${yy} ${x0 + bw},${yy + r} V${H - padB} Z` : '';
-    return `<g data-tip="${esc(label)}"><rect class="bar-hit" x="${padL + i * slot}" y="0" width="${slot}" height="${H}"></rect>${path ? `<path class="bar" d="${path}"></path>` : ''}</g>`;
+    let yBase = H - padB;
+    const segs = KINDS.filter(k => x.c[k.k]);
+    const paths = segs.map((k, si) => {
+      const h = x.c[k.k] * unit - (si > 0 ? GAP : 0);
+      const top = yBase - (si > 0 ? GAP : 0) - h;
+      const isTop = si === segs.length - 1;
+      const r = isTop ? Math.min(4, bw / 2, h) : 0;
+      const bottom = yBase - (si > 0 ? GAP : 0);
+      yBase = top;
+      if (h <= 0) return '';
+      return `<path class="seg k-${k.k}" d="M${x0},${bottom} V${top + r} Q${x0},${top} ${x0 + r},${top} H${x0 + bw - r} Q${x0 + bw},${top} ${x0 + bw},${top + r} V${bottom} Z"></path>`;
+    }).join('');
+    const parts = KINDS.filter(k => x.c[k.k]).map(k => `${x.c[k.k]} ${k.label.toLowerCase()}`).join(', ');
+    const label = `${x.d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })}: ${x.c.total} post${x.c.total === 1 ? '' : 's'}${parts ? ' (' + parts + ')' : ''}`;
+    return `<g data-tip="${esc(label)}"><rect class="bar-hit" x="${padL + i * slot}" y="0" width="${slot}" height="${H}"></rect>${paths}</g>`;
   }).join('');
   const ticks = days.map((x, i) => (i % 7 === 2 || i === 29) ? `<text x="${i === 29 ? W : padL + i * slot + slot / 2}" y="${H - 5}" text-anchor="${i === 29 ? 'end' : 'middle'}">${i === 29 ? 'Today' : fmtDate(x.d)}</text>` : '').join('');
-  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Posts per day for the last 30 days, maximum ${max}">
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Posts per day by type for the last 30 days, maximum ${max}">
     <text x="${padL}" y="10">max ${max}/day</text>
     <line class="axis" x1="0" x2="${W}" y1="${H - padB}" y2="${H - padB}"></line>
     ${bars}${ticks}
@@ -339,6 +424,7 @@ document.addEventListener('click', e => {
 });
 $('#search').addEventListener('input', e => { st.search = e.target.value; renderTable(); });
 $('#filter').addEventListener('change', e => { st.filter = e.target.value; renderTable(); });
+$('#kind').addEventListener('change', e => { st.kind = e.target.value; render(); });
 // Sync now: refreshes everything. The server works in time-limited steps, so keep calling
 // until no pages remain.
 $('#syncBtn').addEventListener('click', async () => {
